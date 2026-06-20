@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Mario Kart</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 18px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            font-size: 14px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+        <div>Speed: <span id="speed">0</span> km/h</div>
+        <div>Lap: <span id="lap">1</span></div>
+    </div>
+    <div id="instructions">
+        <div><strong>Controls:</strong></div>
+        <div>↑ / W : Forward</div>
+        <div>↓ / S : Backward</div>
+        <div>← / A : Turn Left</div>
+        <div>→ / D : Turn Right</div>
+        <div>SPACE : Brake</div>
+    </div>
+
+    <script src="lib/three.min.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
