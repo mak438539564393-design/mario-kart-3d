@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Mario Kart v1.1.0</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 18px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            font-weight: bold;
+            z-index: 100;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            font-size: 14px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            z-index: 100;
+        }
+        #version {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            color: white;
+            font-size: 12px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+        <div>Speed: <span id="speed">0</span> km/h</div>
+        <div>Lap: <span id="lap">1</span></div>
+    </div>
+    <div id="instructions">
+        <div><strong>Controls:</strong></div>
+        <div>↑ / W : Forward</div>
+        <div>↓ / S : Backward</div>
+        <div>← / A : Turn Left</div>
+        <div>→ / D : Turn Right</div>
+        <div>SPACE : Brake</div>
+    </div>
+    <div id="version">v1.1.0</div>
+
+    <script>
+        // WebGL Math Library
+        class Vec3 {
+            constructor(x = 0, y = 0, z = 0) {
+                this.x = x;
+                this.y = y;
+                this.z = z;
+            }
+            add(v) {
+                return new Vec3(this.x + v.x, this.y + v.y, this.z + v.z);
+            }
+            sub(v) {
+                return new Vec3(this.x - v.x, this.y - v.y, this.z - v.z);
+            }
+            mul(s) {
+                return new Vec3(this.x * s, this.y * s, this.z * s);
+            }
+            dot(v) {
+                return this.x * v.x + this.y * v.y + this.z * v.z;
+            }
+            cross(v) {
+                return new Vec3(
+                    this.y * v.z - this.z * v.y,
+                    this.z * v.x - this.x * v.z,
+                    this.x * v.y - this.y * v.x
+                );
+            }
+            length() {
+                return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z);
+            }
+            normalize() {
+                const len = this.length();
+                return len > 0 ? new Vec3(this.x / len, this.y / len, this.z / len) : this;
+            }
+            copy() {
+                return new Vec3(this.x, this.y, this.z);
+            }
+        }
+
+        class Mat4 {
+            constructor() {
+                this.m = new Float32Array(16);
+                this.identity();
+            }
+            identity() {
+                const m = this.m;
+                m[0] = 1; m[1] = 0; m[2] = 0; m[3] = 0;
+                m[4] = 0; m[5] = 1; m[6] = 0; m[7] = 0;
+                m[8] = 0; m[9] = 0; m[10] = 1; m[11] = 0;
+                m[12] = 0; m[13] = 0; m[14] = 0; m[15] = 1;
+                return this;
+            }
+            translate(x, y, z) {
+                const m = this.m;
+                m[12] = x;
+                m[13] = y;
+                m[14] = z;
+                return this;
+            }
+            rotateY(angle) {
+                const c = Math.cos(angle);
+                const s = Math.sin(angle);
+                const m = this.m;
+                m[0] = c; m[2] = -s;
+                m[8] = s; m[10] = c;
+                return this;
+            }
+            scale(x, y, z) {
+                const m = this.m;
+                m[0] = x;
+                m[5] = y;
+                m[10] = z;
+                return this;
+            }
+            perspective(fov, aspect, near, far) {
+                const f = 1 / Math.tan(fov / 2);
+                const m = this.m;
+                m[0] = f / aspect;
+                m[5] = f;
+                m[10] = (far + near) / (near - far);
+                m[11] = -1;
+                m[14] = (2 * far * near) / (near - far);
+                return this;
+            }
+            lookAt(eye, target, up) {
+                const z = eye.sub(target).normalize();
+                const x = up.cross(z).normalize();
+                const y = z.cross(x).normalize();
+                const m = this.m;
+                m[0] = x.x; m[4] = x.y; m[8] = x.z; m[12] = -x.dot(eye);
+                m[1] = y.x; m[5] = y.y; m[9] = y.z; m[13] = -y.dot(eye);
+                m[2] = z.x; m[6] = z.y; m[10] = z.z; m[14] = -z.dot(eye);
+                m[3] = 0; m[7] = 0; m[11] = 0; m[15] = 1;
+                return this;
+            }
+        }
+
+        // WebGL Renderer
+        class WebGLApp {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.gl = this.canvas.getContext('webgl2');
+                if (!this.gl) {
+                    alert('WebGL 2.0 not supported');
+                    return;
+                }
+                this.gl.clearColor(0.5, 0.7, 0.9, 1.0);
+                this.gl.enable(this.gl.DEPTH_TEST);
+                this.gl.enable(this.gl.CULL_FACE);
+                this.gl.cullFace(this.gl.BACK);
+                
+                this.program = this.createProgram();
+                this.meshes = [];
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+            }
+
+            resize() {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+                this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+            }
+
+            createProgram() {
+                const vertexShader = `
+                    #version 300 es
+                    precision highp float;
+                    
+                    layout(location = 0) in vec3 position;
+                    layout(location = 1) in vec3 normal;
+                    layout(location = 2) in vec3 color;
+                    
+                    uniform mat4 projection;
+                    uniform mat4 view;
+                    uniform mat4 model;
+                    
+                    out vec3 vNormal;
+                    out vec3 vColor;
+                    out vec3 vPosition;
+                    
+                    void main() {
+                        vPosition = (model * vec4(position, 1.0)).xyz;
+                        vNormal = normalize((model * vec4(normal, 0.0)).xyz);
+                        vColor = color;
+                        gl_Position = projection * view * vec4(vPosition, 1.0);
+                    }
+                `;
+
+                const fragmentShader = `
+                    #version 300 es
+                    precision highp float;
+                    
+                    in vec3 vNormal;
+                    in vec3 vColor;
+                    in vec3 vPosition;
+                    
+                    uniform vec3 lightPos;
+                    uniform vec3 viewPos;
+                    
+                    out vec4 FragColor;
+                    
+                    void main() {
+                        vec3 norm = normalize(vNormal);
+                        vec3 lightDir = normalize(lightPos - vPosition);
+                        float diff = max(dot(norm, lightDir), 0.0);
+                        
+                        vec3 viewDir = normalize(viewPos - vPosition);
+                        vec3 reflectDir = reflect(-lightDir, norm);
+                        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+                        
+                        vec3 ambient = vColor * 0.3;
+                        vec3 diffuse = vColor * diff * 0.7;
+                        vec3 specular = vec3(1.0) * spec * 0.2;
+                        
+                        FragColor = vec4(ambient + diffuse + specular, 1.0);
+                    }
+                `;
+
+                const vs = this.compileShader(vertexShader, this.gl.VERTEX_SHADER);
+                const fs = this.compileShader(fragmentShader, this.gl.FRAGMENT_SHADER);
+                const program = this.gl.createProgram();
+                this.gl.attachShader(program, vs);
+                this.gl.attachShader(program, fs);
+                this.gl.linkProgram(program);
+                return program;
+            }
+
+            compileShader(source, type) {
+                const shader = this.gl.createShader(type);
+                this.gl.shaderSource(shader, source);
+                this.gl.compileShader(shader);
+                return shader;
+            }
+
+            createMesh(vertices, normals, colors, indices) {
+                const gl = this.gl;
+                const vao = gl.createVertexArray();
+                gl.bindVertexArray(vao);
+
+                const posBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+                gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(0);
+
+                const normBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, normBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
+                gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(1);
+
+                const colorBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+                gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(2);
+
+                const indexBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+                gl.bindVertexArray(null);
+
+                return { vao, indexCount: indices.length };
+            }
+
+            createBox(x, y, z, w, h, d, r, g, b) {
+                const hw = w / 2, hh = h / 2, hd = d / 2;
+                const vertices = [
+                    // Front
+                    -hw, -hh, hd, hw, -hh, hd, hw, hh, hd, -hw, hh, hd,
+                    // Back
+                    -hw, -hh, -hd, hw, -hh, -hd, hw, hh, -hd, -hw, hh, -hd,
+                    // Left
+                    -hw, -hh, hd, -hw, hh, hd, -hw, hh, -hd, -hw, -hh, -hd,
+                    // Right
+                    hw, -hh, hd, hw, hh, hd, hw, hh, -hd, hw, -hh, -hd,
+                    // Top
+                    -hw, hh, hd, hw, hh, hd, hw, hh, -hd, -hw, hh, -hd,
+                    // Bottom
+                    -hw, -hh, hd, hw, -hh, hd, hw, -hh, -hd, -hw, -hh, -hd
+                ];
+
+                const normals = [
+                    // Front
+                    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+                    // Back
+                    0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+                    // Left
+                    -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
+                    // Right
+                    1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+                    // Top
+                    0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+                    // Bottom
+                    0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0
+                ];
+
+                const colors = [];
+                for (let i = 0; i < 24; i++) {
+                    colors.push(r, g, b);
+                }
+
+                const indices = [
+                    0, 1, 2, 0, 2, 3,
+                    4, 6, 5, 4, 7, 6,
+                    8, 9, 10, 8, 10, 11,
+                    12, 14, 13, 12, 15, 14,
+                    16, 17, 18, 16, 18, 19,
+                    20, 22, 21, 20, 23, 22
+                ];
+
+                const mesh = this.createMesh(vertices, normals, colors, indices);
+                return { mesh, pos: new Vec3(x, y, z), rot: new Vec3(0, 0, 0) };
+            }
+
+            createCylinder(x, y, z, radius, height, segments, r, g, b) {
+                const vertices = [];
+                const normals = [];
+                const colors = [];
+                const indices = [];
+
+                const h = height / 2;
+
+                for (let i = 0; i <= segments; i++) {
+                    const angle = (i / segments) * Math.PI * 2;
+                    const cx = Math.cos(angle);
+                    const cz = Math.sin(angle);
+
+                    vertices.push(cx * radius, h, cz * radius);
+                    vertices.push(cx * radius, -h, cz * radius);
+
+                    normals.push(cx, 0, cz);
+                    normals.push(cx, 0, cz);
+
+                    colors.push(r, g, b);
+                    colors.push(r, g, b);
+                }
+
+                for (let i = 0; i < segments; i++) {
+                    const a = i * 2;
+                    const b = (i + 1) * 2;
+                    indices.push(a, a + 1, b);
+                    indices.push(a + 1, b + 1, b);
+                }
+
+                const mesh = this.createMesh(vertices, normals, colors, indices);
+                return { mesh, pos: new Vec3(x, y, z), rot: new Vec3(0, 0, 0) };
+            }
+
+            createPlane(x, y, z, w, h, r, g, b) {
+                const hw = w / 2, hh = h / 2;
+                const vertices = [
+                    -hw, 0, -hh, hw, 0, -hh, hw, 0, hh, -hw, 0, hh
+                ];
+
+                const normals = [
+                    0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0
+                ];
+
+                const colors = [
+                    r, g, b, r, g, b, r, g, b, r, g, b
+                ];
+
+                const indices = [0, 1, 2, 0, 2, 3];
+
+                const mesh = this.createMesh(vertices, normals, colors, indices);
+                return { mesh, pos: new Vec3(x, y, z), rot: new Vec3(0, 0, 0) };
+            }
+
+            render(meshes, camera) {
+                const gl = this.gl;
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+                const projection = new Mat4();
+                projection.perspective(Math.PI / 4, this.canvas.width / this.canvas.height, 0.1, 1000);
+
+                const view = new Mat4();
+                view.lookAt(camera.eye, camera.target, new Vec3(0, 1, 0));
+
+                const lightPos = new Vec3(100, 100, 50);
+                const viewPosLoc = gl.getUniformLocation(this.program, 'viewPos');
+                const lightPosLoc = gl.getUniformLocation(this.program, 'lightPos');
+                const projLoc = gl.getUniformLocation(this.program, 'projection');
+                const viewLoc = gl.getUniformLocation(this.program, 'view');
+                const modelLoc = gl.getUniformLocation(this.program, 'model');
+
+                gl.useProgram(this.program);
+                gl.uniformMatrix4fv(projLoc, false, projection.m);
+                gl.uniformMatrix4fv(viewLoc, false, view.m);
+                gl.uniform3f(viewPosLoc, camera.eye.x, camera.eye.y, camera.eye.z);
+                gl.uniform3f(lightPosLoc, lightPos.x, lightPos.y, lightPos.z);
+
+                for (const obj of meshes) {
+                    const model = new Mat4();
+                    model.translate(obj.pos.x, obj.pos.y, obj.pos.z);
+                    model.rotateY(obj.rot.y);
+
+                    gl.uniformMatrix4fv(modelLoc, false, model.m);
+                    gl.bindVertexArray(obj.mesh.vao);
+                    gl.drawElements(gl.TRIANGLES, obj.mesh.indexCount, gl.UNSIGNED_SHORT, 0);
+                }
+            }
+        }
+
+        // Game initialization
+        function initGame() {
+            const app = new WebGLApp();
+            const keys = {};
+
+            window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+            window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+            // Create scene
+            const ground = app.createPlane(0, -5, 0, 300, 300, 0.13, 0.55, 0.13);
+            
+            const car = app.createBox(0, 0, 0, 1.5, 1, 3, 1, 0, 0);
+            const carTop = app.createBox(0, 0.8, -0.2, 1.2, 0.6, 1.5, 0.8, 0, 0);
+
+            const wheel1 = app.createCylinder(-0.75, 0, 0.8, 0.5, 0.6, 12, 0.2, 0.2, 0.2);
+            const wheel2 = app.createCylinder(0.75, 0, 0.8, 0.5, 0.6, 12, 0.2, 0.2, 0.2);
+            const wheel3 = app.createCylinder(-0.75, 0, -0.8, 0.5, 0.6, 12, 0.2, 0.2, 0.2);
+            const wheel4 = app.createCylinder(0.75, 0, -0.8, 0.5, 0.6, 12, 0.2, 0.2, 0.2);
+
+            // Track circles
+            const trackMeshes = [];
+            const trackRadius = 80;
+            const trackWidth = 40;
+            const trackSegments = 30;
+
+            for (let i = 0; i < trackSegments; i++) {
+                const angle = (i / trackSegments) * Math.PI * 2;
+                const nextAngle = ((i + 1) / trackSegments) * Math.PI * 2;
+
+                const x1 = Math.cos(angle) * trackRadius;
+                const z1 = Math.sin(angle) * trackRadius;
+                const x2 = Math.cos(nextAngle) * trackRadius;
+                const z2 = Math.sin(nextAngle) * trackRadius;
+
+                const midX = (x1 + x2) / 2;
+                const midZ = (z1 + z2) / 2;
+                const trackSegment = app.createPlane(midX, -4.9, midZ, trackWidth, 20, 0.2, 0.2, 0.2);
+                trackSegment.rot.y = angle;
+                trackMeshes.push(trackSegment);
+            }
+
+            // Trees
+            const trees = [];
+            for (let i = 0; i < 20; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 120 + Math.random() * 50;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+
+                const trunk = app.createCylinder(x, 10, z, 2, 20, 8, 0.54, 0.27, 0.07);
+                const leaves = app.createBox(x, 30, z, 20, 20, 20, 0.13, 0.55, 0.13);
+                trees.push(trunk, leaves);
+            }
+
+            // Finish line
+            const finishLine = app.createPlane(0, -4.8, -trackRadius, 50, 4, 1, 1, 1);
+
+            // Game state
+            const player = {
+                pos: new Vec3(0, 0, 0),
+                rot: 0,
+                speed: 0,
+                maxSpeed: 0.5,
+                acceleration: 0.02,
+                friction: 0.95,
+                turnSpeed: 0.08,
+                laps: 1
+            };
+
+            const camera = {
+                eye: new Vec3(0, 15, 20),
+                target: new Vec3(0, 0, 0)
+            };
+
+            function update() {
+                const forward = keys['ArrowUp'] || keys['w'] || keys['W'];
+                const backward = keys['ArrowDown'] || keys['s'] || keys['S'];
+                const left = keys['ArrowLeft'] || keys['a'] || keys['A'];
+                const right = keys['ArrowRight'] || keys['d'] || keys['D'];
+                const brake = keys[' '];
+
+                if (forward) {
+                    player.speed = Math.min(player.speed + player.acceleration, player.maxSpeed);
+                } else if (backward) {
+                    player.speed = Math.max(player.speed - player.acceleration, -player.maxSpeed * 0.5);
+                } else {
+                    player.speed *= player.friction;
+                }
+
+                if (brake) {
+                    player.speed *= 0.92;
+                }
+
+                if (Math.abs(player.speed) > 0.01) {
+                    if (left) player.rot += player.turnSpeed;
+                    if (right) player.rot -= player.turnSpeed;
+                }
+
+                player.pos.x += Math.sin(player.rot) * player.speed;
+                player.pos.z += Math.cos(player.rot) * player.speed;
+
+                const dist = Math.sqrt(player.pos.x * player.pos.x + player.pos.z * player.pos.z);
+                if (dist > 300) {
+                    const ratio = 300 / dist;
+                    player.pos.x *= ratio;
+                    player.pos.z *= ratio;
+                    player.speed *= 0.7;
+                }
+
+                // Update car position
+                car.pos.copy(player.pos);
+                car.pos.y = 0;
+                car.rot.y = player.rot;
+
+                carTop.pos.copy(player.pos);
+                carTop.pos.y = 0.8;
+                carTop.rot.y = player.rot;
+
+                // Update wheels
+                wheel1.pos.copy(player.pos);
+                wheel1.pos.y = 0;
+                wheel1.rot.y = player.rot;
+                wheel1.rot.z += player.speed * 0.1;
+
+                wheel2.pos.copy(player.pos);
+                wheel2.pos.y = 0;
+                wheel2.rot.y = player.rot;
+                wheel2.rot.z += player.speed * 0.1;
+
+                wheel3.pos.copy(player.pos);
+                wheel3.pos.y = 0;
+                wheel3.rot.y = player.rot;
+                wheel3.rot.z += player.speed * 0.1;
+
+                wheel4.pos.copy(player.pos);
+                wheel4.pos.y = 0;
+                wheel4.rot.y = player.rot;
+                wheel4.rot.z += player.speed * 0.1;
+
+                // Update camera
+                const cameraDistance = 20;
+                const cameraHeight = 10;
+                camera.eye.x = player.pos.x - Math.sin(player.rot) * cameraDistance;
+                camera.eye.z = player.pos.z - Math.cos(player.rot) * cameraDistance;
+                camera.eye.y = player.pos.y + cameraHeight;
+                camera.target.x = player.pos.x;
+                camera.target.y = player.pos.y + 2;
+                camera.target.z = player.pos.z;
+
+                document.getElementById('speed').textContent = Math.round(Math.abs(player.speed) * 200);
+            }
+
+            function animate() {
+                update();
+
+                const allMeshes = [
+                    ground,
+                    car, carTop,
+                    wheel1, wheel2, wheel3, wheel4,
+                    finishLine,
+                    ...trackMeshes,
+                    ...trees
+                ];
+
+                app.render(allMeshes, camera);
+                requestAnimationFrame(animate);
+            }
+
+            animate();
+        }
+
+        window.addEventListener('load', initGame);
+        if (document.readyState !== 'loading') {
+            initGame();
+        }
+    </script>
+</body>
+</html>
